@@ -12,6 +12,7 @@
 
 module PExp where
 
+import Control.Applicative
 import Data.Proxy
 import Data.Type.Equality
 import GHC.TypeLits
@@ -26,8 +27,29 @@ data ScopedSymbol (s :: Symbol) (env :: [(Symbol,*)]) (a :: *) =
 data PExp (env :: [(Symbol,*)]) (a :: *) where
   Pure :: a -> PExp env a
   Fail :: PExp env a
+  Map  :: (a -> b) -> PExp env a -> PExp env b
+  Bind :: PExp env a -> (a -> PExp env b) -> PExp env b
   Symb :: String -> PExp env String
   Var  :: ScopedSymbol s env a -> PExp env a
+  Cat  :: PExp env (a -> b) -> PExp env a -> PExp env b
+  Alt  :: PExp env a -> PExp env a -> PExp env a
+  Star :: PExp env a -> PExp env [a]
+
+instance Functor (PExp env) where
+  fmap f = Map f
+
+instance Applicative (PExp env) where
+  pure  = Pure
+  (<*>) = Cat
+
+instance Monad (PExp env) where
+  return = pure
+  (>>=)  = Bind
+  fail   = const Fail
+
+instance Alternative (PExp env) where
+  empty = Fail
+  (<|>) = Alt
 
 -- De Bruijn indices and their generation
 
@@ -55,6 +77,8 @@ type family Lookup (s :: Symbol) (env :: [(Symbol,*)]) :: Maybe * where
   Lookup s '[]             = 'Nothing
   Lookup s ('(t,a) ': env) = If (s == t) ('Just a) (Lookup s env)
 
+-- type class and its instances for building De Bruijn indices.
+
 class Lookup s env ~ 'Just a =>
       IndexBuilder (env :: [(Symbol,*)])
                    (s :: Symbol)
@@ -71,3 +95,28 @@ instance ((s == t) ~ 'False
                         (AtHead g '(s, a))) =>
          IndexBuilder ('(t, b) ': g) s a 'False where
   index _ nm = There $ index (Proxy :: Proxy (AtHead g '(s, a))) nm
+
+-- definition of an APExp
+
+data APExp (env :: [(Symbol,*)]) (env' :: [(Symbol,*)]) where
+  Exp    :: PExp env a -> APExp env env
+  New    :: Lookup s env ~ 'Nothing =>
+            Name s ->
+            PExp ('(s, a) ': env) a ->
+            APExp env ('(s, a) ': env)
+  Modify :: ScopedSymbol s env a ->
+            PExp env a           ->
+            APExp env env
+                        
+-- productions
+
+data APExps (env :: [(Symbol,*)]) (env' :: [(Symbol,*)]) where
+  Done :: APExps env env
+  Next :: APExp env env1 -> APExps env1 env' -> APExps env env'
+
+-- adaptable parser expression grammar
+
+data APEG = forall env s a. APEG (ScopedSymbol s env a) (APExps '[] env)
+
+-- examples
+
