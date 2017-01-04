@@ -12,6 +12,54 @@
 
 module PExp where
 
+import Data.Proxy
+import Data.Type.Equality
+import Data.Functor.Identity
+import GHC.TypeLits
+import Text.Parsec
+
+data PExp (env :: [(Symbol,*)]) (a :: *) where
+  Pure :: a -> PExp env a
+  Fail :: PExp env a
+  Map  :: (a -> b) -> PExp env a -> PExp env b
+  Bind :: PExp env a -> (a -> PExp env b) -> PExp env b
+  Symb :: String -> PExp env String 
+  Var  :: (KnownSymbol s, Lookup s env ~ 'Just a) => Proxy s -> PExp env a
+--  Cat  :: PExp (a -> b) -> PExp a -> PExp b
+--  Alt  :: PExp a -> PExp a -> PExp a
+--  Star :: PExp a -> PExp [a]
+
+data HList (xs :: [(Symbol,*)]) where
+  Nil :: HList '[]
+  (:*) :: KnownSymbol s => (Proxy s, PExp ('(s,a) ': xs) a) -> HList xs -> HList ('(s,a) ': xs)
+
+infixr 5 :*
+
+type Parser a = ParsecT String () Identity a
+
+type family If (b :: Bool) (l :: k) (r :: k) :: k where
+  If 'True  l r = l
+  If 'False l r = r
+
+type family Lookup (s :: Symbol) (env :: [(Symbol,*)]) :: Maybe * where
+  Lookup s '[]             = 'Nothing
+  Lookup s ('(t,a) ': env) = If (s == t) ('Just a) (Lookup s env)
+
+
+look :: (Lookup s xs ~ 'Just a, KnownSymbol s) => Proxy s -> HList xs -> PExp xs a
+look s ((s',p) :* rho) = case sameSymbol s s' of
+                           Just Refl -> p
+                           Nothing   -> look s rho
+
+compile :: HList xs -> PExp xs a -> Parser a
+compile rho (Pure v) = pure v
+compile rho Fail = fail "parse error"
+compile rho (Map f p) = f <$> compile rho p
+compile rho (Bind p f) = compile rho p >>= compile rho . f
+compile rho (Symb s) = string s
+compile rho (Var s) = compile rho (look s rho)
+
+{-
 import Control.Applicative
 import Data.Proxy
 import Data.Type.Equality
@@ -63,12 +111,6 @@ type family AtHead (g :: [k]) (s :: k) :: Bool where
   AtHead '[]      s = 'False
   AtHead (t ': g) s = s == t
 
--- environment  
-
-data Env (env :: [(Symbol,*)]) where
-  Nil  :: Env '[]
-  (:>) :: KnownSymbol s => (Proxy s, PExp ('(s, a) ': env) a) -> Env env -> Env ('(s, a) ': env)
-
 type family If (b :: Bool) (l :: k) (r :: k) :: k where
   If 'True  l r = l
   If 'False l r = r
@@ -96,7 +138,12 @@ instance ((s == t) ~ 'False
          IndexBuilder ('(t, b) ': g) s a 'False where
   index _ nm = There $ index (Proxy :: Proxy (AtHead g '(s, a))) nm
 
--- definition of an APExp
+data Ex2 (p :: k -> k' -> *) where
+  Ex :: p k k' -> Ex2 p
+
+type WPExp = Ex2 PExp
+
+definition of an APExp
 
 data APExp (env :: [(Symbol,*)]) (env' :: [(Symbol,*)]) where
   Exp    :: PExp env a -> APExp env env
@@ -118,5 +165,4 @@ data APExps (env :: [(Symbol,*)]) (env' :: [(Symbol,*)]) where
 
 data APEG = forall env s a. APEG (ScopedSymbol s env a) (APExps '[] env)
 
--- examples
-
+--}
