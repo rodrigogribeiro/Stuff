@@ -18,7 +18,7 @@ import Data.Proxy
 import Data.Type.Equality
 import GHC.TypeLits
 
-import Text.Parsec hiding ((<|>))
+import Text.Parsec hiding ((<|>), Empty)
 
 import Unsafe.Coerce
 
@@ -140,8 +140,25 @@ interp rho (Star p)
 
 data APEG (env :: [(Symbol,*)])
   = APEG {
-       start :: forall s a. Lookup s env ~ 'Just a => Proxy s
-    ,  prods :: Env env            
+      prods :: Env env            
     }
 
+modifyRule :: ( Lookup s env ~ 'Just a
+              , KnownSymbol s )
+              => Proxy s
+              -> PExp (DropWhileNotSame s env) a
+              -> APEG env
+              -> APEG env
+modifyRule s p (APEG pr)
+  = APEG (update s p pr)
+
+
+insertRule :: ( Lookup s env ~ 'Nothing
+              , KnownSymbol s )
+              => Proxy s
+              -> PExp ('(s,a) ': env) a
+              -> APEG env
+              -> APEG ('(s,a) ': env)
+insertRule s p (APEG pr)
+  = APEG (insert s p pr)
 
