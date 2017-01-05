@@ -162,3 +162,5 @@ insertRule :: ( Lookup s env ~ 'Nothing
 insertRule s p (APEG pr)
   = APEG (insert s p pr)
 
+emptyAPEG :: APEG '[]
+emptyAPEG = APEG Nil
