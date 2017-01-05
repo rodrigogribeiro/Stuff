@@ -13,8 +13,14 @@
 module Examples where
 
 import Control.Applicative
-
+import Data.Proxy
 import PExp
+
+test :: Env '[ '("a",Bool), '("b",Int), '("c",Bool)]
+test = (Proxy :: Proxy "a", undefined) :*
+       (Proxy :: Proxy "b", undefined) :*
+       (Proxy :: Proxy "c", undefined) :* Nil
+
 
 -- example PEG A -> aA / lambda
 {-

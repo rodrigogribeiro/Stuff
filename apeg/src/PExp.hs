@@ -12,157 +12,109 @@
 
 module PExp where
 
-import Data.Proxy
-import Data.Type.Equality
 import Data.Functor.Identity
-import GHC.TypeLits
-import Text.Parsec
-
-data PExp (env :: [(Symbol,*)]) (a :: *) where
-  Pure :: a -> PExp env a
-  Fail :: PExp env a
-  Map  :: (a -> b) -> PExp env a -> PExp env b
-  Bind :: PExp env a -> (a -> PExp env b) -> PExp env b
-  Symb :: String -> PExp env String 
-  Var  :: (KnownSymbol s, Lookup s env ~ 'Just a) => Proxy s -> PExp env a
---  Cat  :: PExp (a -> b) -> PExp a -> PExp b
---  Alt  :: PExp a -> PExp a -> PExp a
---  Star :: PExp a -> PExp [a]
-
-data HList (xs :: [(Symbol,*)]) where
-  Nil :: HList '[]
-  (:*) :: KnownSymbol s => (Proxy s, PExp ('(s,a) ': xs) a) -> HList xs -> HList ('(s,a) ': xs)
-
-infixr 5 :*
-
-type Parser a = ParsecT String () Identity a
-
-type family If (b :: Bool) (l :: k) (r :: k) :: k where
-  If 'True  l r = l
-  If 'False l r = r
-
-type family Lookup (s :: Symbol) (env :: [(Symbol,*)]) :: Maybe * where
-  Lookup s '[]             = 'Nothing
-  Lookup s ('(t,a) ': env) = If (s == t) ('Just a) (Lookup s env)
-
-
-look :: (Lookup s xs ~ 'Just a, KnownSymbol s) => Proxy s -> HList xs -> PExp xs a
-look s ((s',p) :* rho) = case sameSymbol s s' of
-                           Just Refl -> p
-                           Nothing   -> look s rho
-
-compile :: HList xs -> PExp xs a -> Parser a
-compile rho (Pure v) = pure v
-compile rho Fail = fail "parse error"
-compile rho (Map f p) = f <$> compile rho p
-compile rho (Bind p f) = compile rho p >>= compile rho . f
-compile rho (Symb s) = string s
-compile rho (Var s) = compile rho (look s rho)
-
-{-
-import Control.Applicative
+import Control.Applicative hiding (many)
 import Data.Proxy
 import Data.Type.Equality
 import GHC.TypeLits
 
--- syntax definition
+import Text.Parsec hiding ((<|>))
 
-data Name (s :: Symbol) = KnownSymbol s => Name
-
-data ScopedSymbol (s :: Symbol) (env :: [(Symbol,*)]) (a :: *) =
-  (IndexBuilder env s a (AtHead env '(s,a))) => The (Name s)
+import Unsafe.Coerce
 
 data PExp (env :: [(Symbol,*)]) (a :: *) where
   Pure :: a -> PExp env a
   Fail :: PExp env a
   Map  :: (a -> b) -> PExp env a -> PExp env b
   Bind :: PExp env a -> (a -> PExp env b) -> PExp env b
-  Symb :: String -> PExp env String
-  Var  :: ScopedSymbol s env a -> PExp env a
+  Sym  :: String -> PExp env String
+  Var  :: ( KnownSymbol s
+          , Lookup s env ~ 'Just a) => Proxy s -> PExp env a
   Cat  :: PExp env (a -> b) -> PExp env a -> PExp env b
   Alt  :: PExp env a -> PExp env a -> PExp env a
   Star :: PExp env a -> PExp env [a]
+  Not  :: PExp env a -> PExp env ()
 
-instance Functor (PExp env) where
+instance Functor (PExp  env) where
   fmap f = Map f
 
 instance Applicative (PExp env) where
   pure  = Pure
   (<*>) = Cat
 
-instance Monad (PExp env) where
-  return = pure
-  (>>=)  = Bind
-  fail   = const Fail
-
 instance Alternative (PExp env) where
   empty = Fail
   (<|>) = Alt
 
--- De Bruijn indices and their generation
+instance Monad (PExp env) where
+  return = pure
+  (>>=)  = Bind
+  
+data Env (xs :: [(Symbol,*)]) where
+  Nil :: Env '[]
+  (:*) :: ( KnownSymbol s
+          , ('(s,a) `NotElem` xs) ~ 'True)
+          => (Proxy s, PExp ('(s,a) ': xs) a) -> Env xs -> Env ('(s,a) ': xs)
 
-data Index (v :: k) (env :: [k]) where
-  Here  :: Index v (v ': env)
-  There :: Index v env -> Index v (v' ': env)
+infixr 5 :*
 
--- true if s is at list head
-
-type family AtHead (g :: [k]) (s :: k) :: Bool where
-  AtHead '[]      s = 'False
-  AtHead (t ': g) s = s == t
+type family NotElem (x :: (k,k')) (xs :: [(k,k')]) :: Bool where
+  '(x,x') `NotElem` '[] = 'True
+  '(x,x') `NotElem` ('(y,y') ': ys) = If (x == y) 'False ('(x,x') `NotElem` ys)
 
 type family If (b :: Bool) (l :: k) (r :: k) :: k where
-  If 'True  l r = l
-  If 'False l r = r
+    If 'True  l r = l
+    If 'False l r = r
 
 type family Lookup (s :: Symbol) (env :: [(Symbol,*)]) :: Maybe * where
-  Lookup s '[]             = 'Nothing
-  Lookup s ('(t,a) ': env) = If (s == t) ('Just a) (Lookup s env)
+    Lookup s '[]             = 'Nothing
+    Lookup s ('(t,a) ': env) = If (s == t) ('Just a) (Lookup s env)
 
--- type class and its instances for building De Bruijn indices.
-
-class Lookup s env ~ 'Just a =>
-      IndexBuilder (env :: [(Symbol,*)])
-                   (s :: Symbol)
-                   (a :: *)
-                   (b :: Bool) where
-  index :: Proxy b -> Name s -> Index '(s,a) env 
+type family DropWhileNotSame (s :: Symbol) (xs :: [(Symbol,*)]) :: [(Symbol,*)] where
+  DropWhileNotSame s '[] = '[]
+  DropWhileNotSame s ('(x,a) ': xs) = If (s == x) ('(x,a) ': xs) (DropWhileNotSame s xs)
 
 
-instance IndexBuilder ('(s, a) ': env) s a 'True where
-  index _ _ = Here
+dropWhileNotSame :: (KnownSymbol s
+                    , Lookup s env ~ 'Just a)
+                    => Proxy s
+                    -> Env env
+                    -> Env (DropWhileNotSame s env)
+dropWhileNotSame s ((s', p) :* rho)
+  = case sameOrNotSymbol s s' of
+       Left Refl -> dropWhileNotSame s rho
+       Right Refl -> (s', p) :* rho
 
-instance ((s == t) ~ 'False
-         , IndexBuilder g s a
-                        (AtHead g '(s, a))) =>
-         IndexBuilder ('(t, b) ': g) s a 'False where
-  index _ nm = There $ index (Proxy :: Proxy (AtHead g '(s, a))) nm
+sameOrNotSymbol :: (KnownSymbol a, KnownSymbol b)
+                => Proxy a -> Proxy b -> Either ((a == b) :~: 'False) (a :~: b)
+sameOrNotSymbol s s' = maybe (Left $ unsafeCoerce Refl) Right $ sameSymbol s s'
 
-data Ex2 (p :: k -> k' -> *) where
-  Ex :: p k k' -> Ex2 p
+look :: ( Lookup s xs ~ 'Just a
+        , KnownSymbol s)
+        => Proxy s -> Env xs -> PExp (DropWhileNotSame s xs) a
+look s ((s',p) :* xs)
+  = case sameOrNotSymbol s s' of
+       Left Refl -> look s xs
+       Right Refl -> p
 
-type WPExp = Ex2 PExp
+type Parser a = ParsecT String () Identity a
 
-definition of an APExp
-
-data APExp (env :: [(Symbol,*)]) (env' :: [(Symbol,*)]) where
-  Exp    :: PExp env a -> APExp env env
-  New    :: Lookup s env ~ 'Nothing =>
-            Name s ->
-            PExp ('(s, a) ': env) a ->
-            APExp env ('(s, a) ': env)
-  Modify :: ScopedSymbol s env a ->
-            PExp env a           ->
-            APExp env env
-                        
--- productions
-
-data APExps (env :: [(Symbol,*)]) (env' :: [(Symbol,*)]) where
-  Done :: APExps env env
-  Next :: APExp env env1 -> APExps env1 env' -> APExps env env'
-
--- adaptable parser expression grammar
-
-data APEG = forall env s a. APEG (ScopedSymbol s env a) (APExps '[] env)
-
---}
+interp :: Env env -> PExp env a -> Parser a
+interp rho (Pure v)
+  = pure v
+interp rho Fail
+  = fail "parse error"
+interp rho (Map f p)
+  = f <$> (interp rho p)
+interp rho (Bind p f)
+  = interp rho p >>= interp rho . f
+interp rho (Sym s)
+  = string s
+interp rho (Var v)
+  = interp (dropWhileNotSame v rho) (look v rho)
+interp rho (Cat p p')
+  = interp rho p <*> interp rho p'
+interp rho (Alt p p')
+  = interp rho p <|> interp rho p'
+interp rho (Star p)
+  = many (interp rho p)
