@@ -53,14 +53,10 @@ instance Monad (PExp env) where
 data Env (xs :: [(Symbol,*)]) where
   Nil :: Env '[]
   (:*) :: ( KnownSymbol s
-          , ('(s,a) `NotElem` xs) ~ 'True)
+          , Lookup s xs ~ 'Nothing )
           => (Proxy s, PExp ('(s,a) ': xs) a) -> Env xs -> Env ('(s,a) ': xs)
 
 infixr 5 :*
-
-type family NotElem (x :: (k,k')) (xs :: [(k,k')]) :: Bool where
-  '(x,x') `NotElem` '[] = 'True
-  '(x,x') `NotElem` ('(y,y') ': ys) = If (x == y) 'False ('(x,x') `NotElem` ys)
 
 type family If (b :: Bool) (l :: k) (r :: k) :: k where
     If 'True  l r = l
@@ -97,6 +93,28 @@ look s ((s',p) :* xs)
        Left Refl -> look s xs
        Right Refl -> p
 
+
+update :: ( Lookup s env ~ 'Just a
+          , KnownSymbol s )
+          => Proxy s
+          -> PExp (DropWhileNotSame s env) a
+          -> Env env
+          -> Env env
+update s p ((s', p') :* rho)
+  = case sameOrNotSymbol s s' of
+       Left Refl  -> (s',p') :* update s p rho
+       Right Refl -> (s, p' <|> p) :* rho
+
+insert :: ( Lookup s env ~ 'Nothing
+          , KnownSymbol s )
+          => Proxy s
+          -> PExp ('(s,a) ': env) a
+          -> Env env
+          -> Env ('(s,a) ': env)
+insert s p rho
+  = (s , p) :* rho
+
+
 type Parser a = ParsecT String () Identity a
 
 interp :: Env env -> PExp env a -> Parser a
@@ -118,3 +136,12 @@ interp rho (Alt p p')
   = interp rho p <|> interp rho p'
 interp rho (Star p)
   = many (interp rho p)
+
+
+data APEG (env :: [(Symbol,*)])
+  = APEG {
+       start :: forall s a. Lookup s env ~ 'Just a => Proxy s
+    ,  prods :: Env env            
+    }
+
+
