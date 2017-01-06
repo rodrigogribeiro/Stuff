@@ -22,25 +22,12 @@ test = (Proxy :: Proxy "a", undefined) :*
        (Proxy :: Proxy "c", undefined) :* Nil
 
 
--- example PEG A -> aA / lambda
-{-
-aVar :: ScopedSymbol "A" ('("A", String) ': '[]) String
-aVar = The (Name :: Name "A")
+aVar :: PExp '[ '("A",String) ] String
+aVar = Var (Proxy :: Proxy "A")
 
-expVar :: PExp ('("A", String) ': '[]) String
-expVar = Var aVar
+expr :: PExp '[ '("A", String) ] String
+expr = (++) <$> Sym "a" <*> aVar <|> pure []
 
-expr :: PExp ('("A", String) ': '[]) String
-expr =  (++) <$> Symb "a" <*> expVar <|> pure []
+apeg :: APEG '[ '("A", String) ]
+apeg = insertRule (Proxy :: Proxy "A") expr emptyAPEG
 
-
-aPExp :: APExp ('("A", String) ': '[]) ('("A", String) ': '[])
-aPExp = Exp expr
-
-aPExp' :: APExp '[] ('("A", String) ': '[])
-aPExp' = New (Name :: Name "A") expr
-
-aPeg :: APEG
-aPeg = APEG aVar (Next aPExp' Done)
-
--}

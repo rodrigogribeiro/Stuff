@@ -58,6 +58,10 @@ data Env (xs :: [(Symbol,*)]) where
 
 infixr 5 :*
 
+type family Null (xs :: [k]) :: Bool where
+  Null '[] = 'True
+  Null (x ': xs)  = 'False
+
 type family If (b :: Bool) (l :: k) (r :: k) :: k where
     If 'True  l r = l
     If 'False l r = r
@@ -133,9 +137,11 @@ interp rho (Var v)
 interp rho (Cat p p')
   = interp rho p <*> interp rho p'
 interp rho (Alt p p')
-  = interp rho p <|> interp rho p'
+  = try (interp rho p) <|> interp rho p'
 interp rho (Star p)
   = many (interp rho p)
+interp rho (Not p)
+  = (try (interp rho p) *> parserZero) <|> pure ()
 
 
 data APEG (env :: [(Symbol,*)])
@@ -164,3 +170,15 @@ insertRule s p (APEG pr)
 
 emptyAPEG :: APEG '[]
 emptyAPEG = APEG Nil
+
+runAPEG :: ( Null env ~ 'False
+           , KnownSymbol s
+           , Lookup s env ~ 'Just a)
+           => Proxy s
+           -> APEG env
+           -> String
+           -> Either String a
+runAPEG s (APEG rho) str
+  = either (Left . show)
+           Right
+           (parse (interp (dropWhileNotSame s rho) $ look s rho) "" str)
